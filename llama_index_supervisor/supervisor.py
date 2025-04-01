@@ -147,7 +147,7 @@ class Supervisor(Workflow):
 
         if not tool_calls:
 
-            return StopEvent(result={"response": response})
+            return StopEvent(result=response)
 
         return ToolCallEvent(tool_calls=tool_calls)
 
