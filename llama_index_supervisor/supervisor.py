@@ -326,16 +326,15 @@ class Supervisor(Workflow):
         #     ChatMessage(role="system", content=agent.system_prompt),
         #     idx=0
         # )
-        await new_ctx.set("memory", memory.model_copy())
+        new_memory = memory.model_copy()
+        await new_ctx.set("memory", new_memory)  # Use new_memory instead of memory.model_copy()
 
         # Run the agent
-        await agent.run(ctx=new_ctx, chat_history=memory.get())
+        await agent.run(ctx=new_ctx, chat_history=new_memory.get())
 
         # Update supervisor memory with agent's memory
         if self.output_mode == "full_history":
-            memo: ChatMemoryBuffer = await new_ctx.get("memory")
-            # remove agent's system prompt from memory
-            memo.chat_store.delete_message(memo.chat_store_key, idx=0)
+            memo: ChatMemoryBuffer = new_memory
             await ctx.set("memory", memo)
         elif self.output_mode == "last_message":
             memo: ChatMemoryBuffer = await new_ctx.get("memory")
