@@ -18,13 +18,24 @@ from .handoff import (
     create_handoff_tool,
     create_handoff_back_messages,
 )
+import json
 
 DEFAULT_SYSTEM_PROMPT = (
-    "You are a supervisor agent. You will be responsible for managing the workflow of other agents and tools. "
+    "You are a {agent_name}. You will be responsible for managing the workflow of other agents and tools. "
     "You will receive user input and delegate tasks to the appropriate agents or tools. "
     "You will also handle the responses from the agents and tools, and provide feedback to the user. "
 )
 
+DEFAULT_DESCRIPTION = (
+    "This agent is responsible for managing the following agents and tools. "
+    "Agents: {agents}. "
+    "Tools: {tools}. "
+    )
+
+TREE_STRUCTURE_PROMPT = (
+    "The following is a tree structure of the agents and tools in the workflow. "
+    "The tree structure is as follows:\n\n{tree_structure}\n\n"
+)
 
 class Supervisor(Workflow):
     def __init__(
@@ -33,14 +44,28 @@ class Supervisor(Workflow):
         agents: set[BaseWorkflowAgent | Workflow] = [],
         tools: list[BaseTool] = [],
         name: str = "supervisor",
-        system_prompt: str | None = DEFAULT_SYSTEM_PROMPT,
+        system_prompt: str | None = None,
         add_handoff_back_messages: bool = True,
         output_mode: str = "full_history",
+        description: str | None = DEFAULT_DESCRIPTION,
+        add_tree_structure: bool = False,
         *args: Any,
         **kwargs: Any,
     ) -> None:
+        """Initialize the Supervisor agent.
+        Args:
+            llm: The LLM to use for the supervisor agent.
+            agents: A list of agents to manage.
+            tools: A list of tools to use.
+            name: The name of the supervisor agent. (sent to LLM as part of the system prompt)
+            system_prompt: The system prompt to use for the supervisor agent. (defaults to DEFAULT_SYSTEM_PROMPT)
+            add_handoff_back_messages: Whether to add handoff back messages to the chat history.
+            output_mode: The output mode for the supervisor agent. Can be either 'full_history' or 'last_message'.
+            description: The description of the supervisor agent. (sent to LLM as part of function description if this supervisor is used as an agent by another supervisor)
+            add_tree_structure: Whether to add a tree structure to the context to give llm more context about the agents and tools.
+        """
         super().__init__(*args, **kwargs)
-
+        self.validate_agents(agents)
         assert (
             llm.metadata.is_function_calling_model
         ), "Supervisor only supports function calling LLMs"
@@ -51,23 +76,22 @@ class Supervisor(Workflow):
         assert (
             len(agents) + len(tools) > 0
         ), "At least one agent or tool must be provided"
-
+        
         # Initialize core attributes
         self.name = name
         self.llm = llm
-        if system_prompt:
-            if isinstance(system_prompt, str):
-                self.system_prompt = [ChatMessage(role="system", content=system_prompt)]
-            elif isinstance(system_prompt, list[str]):
-                self.system_prompt = [
-                    ChatMessage(role="system", content=sp) for sp in system_prompt
-                ]
-            elif isinstance(system_prompt, ChatMessage):
-                self.system_prompt = [system_prompt]
-            elif isinstance(system_prompt, list[ChatMessage]):
-                self.system_prompt = system_prompt
-        else:
-            self.system_prompt = []
+        if not system_prompt:
+            system_prompt = DEFAULT_SYSTEM_PROMPT.format(agent_name=name)
+        if isinstance(system_prompt, str):
+            self.system_prompt = [ChatMessage(role="system", content=system_prompt)]
+        elif isinstance(system_prompt, list[str]):
+            self.system_prompt = [
+                ChatMessage(role="system", content=sp) for sp in system_prompt
+            ]
+        elif isinstance(system_prompt, ChatMessage):
+            self.system_prompt = [system_prompt]
+        elif isinstance(system_prompt, list[ChatMessage]):
+            self.system_prompt = system_prompt
         self.add_handoff_back_messages = add_handoff_back_messages
         self.output_mode = output_mode
 
@@ -78,6 +102,48 @@ class Supervisor(Workflow):
         # Setup agents and tools
         self._setup_agents()
         self._setup_tools()
+
+        # Set up the description
+        self.description = description or DEFAULT_DESCRIPTION.format(
+            agents=", ".join([name for name in self.agent_names]),
+            tools=", ".join([name for name in self.tools_by_name.keys()]),
+        )
+        self.add_tree_structure = add_tree_structure        
+        self.tree_structure = {}
+        if add_tree_structure:
+            self.tree_dict = self._build_agent_tool_tree(self)
+    
+    def _build_agent_tool_tree(self, entity: BaseWorkflowAgent | Workflow | 'Supervisor') -> dict[str, Any]:
+        """
+        Recursively build the tree structure of agents and tools.
+
+        Args:
+            entity: The current agent or supervisor instance.
+
+        Returns:
+            A dictionary representing the tree structure.
+        """
+        tree: dict[str, Any] = {}
+
+        # Get tools directly associated with the current entity (excluding agent handoff tools for supervisors)
+        entity_tools = []
+        if hasattr(entity, 'tools'):
+            agent_tool_names = set(at.metadata.name for at in getattr(entity, 'agent_tools', []))
+            entity_tools = [
+                tool.metadata.name for tool in entity.tools
+                if not isinstance(entity, Supervisor) or tool.metadata.name not in agent_tool_names
+            ]
+        if entity_tools:
+            tree["tools"] = entity_tools
+
+        # Get agents associated with the current entity
+        if hasattr(entity, 'agents') and entity.agents:
+            tree["agents"] = {}
+            for agent in entity.agents:
+                # Recursively build the tree for sub-agents
+                tree["agents"][agent.name] = self._build_agent_tool_tree(agent)
+
+        return tree
 
     def _setup_agents(self) -> None:
         """Register and initialize all agents."""
@@ -93,6 +159,11 @@ class Supervisor(Workflow):
                 )
             self.agent_names.add(normalized_name)
             self.agents_by_name[normalized_name] = agent
+    def validate_agents(self, agents):
+        for agent in agents:
+            assert hasattr(agent, "description"), f"Agent {agent} is missing 'description'"
+            assert hasattr(agent, "name"), f"Agent {agent} is missing 'name'"
+            assert hasattr(agent, "run") and callable(getattr(agent, "run")), f"Agent {agent} is missing 'run()' method"
 
     def _setup_tools(self) -> None:
         """Create tools for agents and register all tools."""
@@ -111,18 +182,21 @@ class Supervisor(Workflow):
         """Prepare chat history from user input."""
 
         # Get or create memory
-        memory = await ctx.get(
+        memory: ChatMemoryBuffer = await ctx.get(
             "memory", default=ChatMemoryBuffer.from_defaults(llm=self.llm)
         )
-
+        user_input = ev.get("input", default=None)
+        
         # Add user input to memory
-        if ev.input:
-            memory.put(ChatMessage(role="user", content=ev.input))
-
-        # Update context
-        await ctx.set("memory", memory)
-
-        return InputEvent(input=memory.get())
+        if user_input:
+            await memory.aput(ChatMessage(role="user", content=user_input))
+            # Update context
+            await ctx.set("memory", memory)
+        input = memory.get()
+        assert len(input) > 0, "Memory input cannot be empty."
+        if self.add_tree_structure:
+            input = f"{TREE_STRUCTURE_PROMPT.format(tree_structure=json.dumps(self.tree_dict, indent=2))}\n\n{input}"
+        return InputEvent(input=input)
 
     @step
     async def handle_llm_input(
@@ -290,7 +364,7 @@ class Supervisor(Workflow):
         tool_msgs.append(
             ChatMessage(
                 role="tool",
-                content=f"Successfully transferred to {agent.name} for task: {task}, reason: {reason}",
+                content=f"Successfully transferred to {agent.name}. Your task is: `{task}`, reason: `{reason}`",
                 additional_kwargs={
                     "tool_call_id": handoff.tool_id,
                     "name": handoff.tool_name,
@@ -347,7 +421,7 @@ class Supervisor(Workflow):
             return
         memory = await ctx.get("memory")
         for msg in messages:
-            memory.put(msg)
+            await memory.aput(msg)
         messages.clear()  # Empty the list after processing
         await ctx.set("memory", memory)
 
