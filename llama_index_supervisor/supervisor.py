@@ -76,7 +76,7 @@ class Supervisor(Workflow):
         assert (
             len(agents) + len(tools) > 0
         ), "At least one agent or tool must be provided"
-        
+
         # Initialize core attributes
         self.name = name
         self.llm = llm
@@ -113,7 +113,7 @@ class Supervisor(Workflow):
         if add_tree_structure:
             self.tree_dict = self._build_agent_tool_tree(self)
     
-    def _build_agent_tool_tree(self, entity: BaseWorkflowAgent | Workflow | 'Supervisor') -> dict[str, Any]:
+    def _build_agent_tool_tree(self, entity: BaseWorkflowAgent | Workflow) -> dict[str, Any]:
         """
         Recursively build the tree structure of agents and tools.
 
