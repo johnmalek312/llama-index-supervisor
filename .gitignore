@@ -175,3 +175,5 @@ cython_debug/
 
 uv.lock
 .python-version
+
+test.cool
