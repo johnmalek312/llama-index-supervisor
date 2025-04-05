@@ -18,8 +18,9 @@ from .handoff import (
     create_handoff_tool,
     create_handoff_back_messages,
 )
+from .agent_name import add_inline_agent_name
 import json
-
+import re
 DEFAULT_SYSTEM_PROMPT = (
     "You are a {agent_name}. You will be responsible for managing the workflow of other agents and tools. "
     "You will receive user input and delegate tasks to the appropriate agents or tools. "
@@ -36,7 +37,8 @@ TREE_STRUCTURE_PROMPT = (
     "The following is a tree structure of the agents and tools in the workflow. "
     "The tree structure is as follows:\n\n{tree_structure}\n\n"
 )
-
+## This is an event driven workflow agent, functions that are decorated with @step return an event that is passed to the next step in the workflow.
+## So the moment an event is returned, the workflow manager will pick it up and pass it to the next step which takes the event as input.
 class Supervisor(Workflow):
     def __init__(
         self,
@@ -49,6 +51,7 @@ class Supervisor(Workflow):
         output_mode: str = "full_history",
         description: str | None = DEFAULT_DESCRIPTION,
         add_tree_structure: bool = False,
+        name_addition: bool = True,
         *args: Any,
         **kwargs: Any,
     ) -> None:
@@ -63,6 +66,7 @@ class Supervisor(Workflow):
             output_mode: The output mode for the supervisor agent. Can be either 'full_history' or 'last_message'.
             description: The description of the supervisor agent. (sent to LLM as part of function description if this supervisor is used as an agent by another supervisor)
             add_tree_structure: Whether to add a tree structure to the context to give llm more context about the agents and tools.
+            name_addition: Whether to add the name of the agent that the message belongs to in the message. (defaults to True)
         """
         super().__init__(*args, **kwargs)
         self.validate_agents(agents)
@@ -108,6 +112,7 @@ class Supervisor(Workflow):
             agents=", ".join([name for name in self.agent_names]),
             tools=", ".join([name for name in self.tools_by_name.keys()]),
         )
+        self.name_addition = name_addition
         self.add_tree_structure = add_tree_structure        
         self.tree_structure = {}
         if add_tree_structure:
@@ -121,29 +126,57 @@ class Supervisor(Workflow):
             entity: The current agent or supervisor instance.
 
         Returns:
-            A dictionary representing the tree structure.
+            A dictionary representing the tree structure, potentially wrapped
+            with the top-level agent's name if entity is self.
         """
-        tree: dict[str, Any] = {}
+        subtree: dict[str, Any] = {} # Renamed 'tree' to 'subtree' for clarity
 
         # Get tools directly associated with the current entity (excluding agent handoff tools for supervisors)
         entity_tools = []
         if hasattr(entity, 'tools'):
-            agent_tool_names = set(at.metadata.name for at in getattr(entity, 'agent_tools', []))
+            # Ensure agent_tools exists before trying to access it, default to empty list
+            agent_tools = getattr(entity, 'agent_tools', [])
+            # Ensure metadata and name exist before accessing
+            agent_tool_names = set(
+                getattr(getattr(at, 'metadata', None), 'name', None)
+                for at in agent_tools
+            )
+            agent_tool_names.discard(None) # Remove None if metadata/name was missing
+
             entity_tools = [
-                tool.metadata.name for tool in entity.tools
-                if not isinstance(entity, Supervisor) or tool.metadata.name not in agent_tool_names
+                getattr(getattr(tool, 'metadata', None), 'name', None)
+                for tool in entity.tools
+                if hasattr(tool, 'metadata') and (
+                    not isinstance(entity, Supervisor) or
+                    getattr(getattr(tool, 'metadata', None), 'name', None) not in agent_tool_names
+                )
             ]
+            # Filter out None names if metadata or name was missing
+            entity_tools = [name for name in entity_tools if name]
+
         if entity_tools:
-            tree["tools"] = entity_tools
+            subtree["tools"] = sorted(entity_tools) # Sort for consistent output
 
         # Get agents associated with the current entity
         if hasattr(entity, 'agents') and entity.agents:
-            tree["agents"] = {}
+            subtree["agents"] = {}
             for agent in entity.agents:
-                # Recursively build the tree for sub-agents
-                tree["agents"][agent.name] = self._build_agent_tool_tree(agent)
+                # Check if agent has a name attribute before using it as a key
+                agent_name = getattr(agent, 'name', None)
+                if agent_name:
+                    # Recursively build the tree for sub-agents
+                    # Use self._build_agent_tool_tree for the recursive call
+                    subtree["agents"][agent_name] = self._build_agent_tool_tree(agent)
 
-        return tree
+        # If the entity being processed is the top-level 'self', wrap the result
+        if entity is self:
+            # Ensure self has a name, provide a default if not
+            self_name = getattr(self, 'name', 'root_agent') # Use a default name if needed
+            return {self_name: subtree}
+        else:
+            # Otherwise, return the subtree directly for recursive calls
+            return subtree
+        
 
     def _setup_agents(self) -> None:
         """Register and initialize all agents."""
@@ -186,17 +219,19 @@ class Supervisor(Workflow):
             "memory", default=ChatMemoryBuffer.from_defaults(llm=self.llm)
         )
         user_input = ev.get("input", default=None)
-        
+        assert len(memory.get_all()) > 0 or user_input, "Memory input cannot be empty."
+        if self.add_tree_structure:
+            # Add tree structure to memory
+            await memory.aput(
+                ChatMessage(role="system", content=TREE_STRUCTURE_PROMPT.format(tree_structure=json.dumps(self.tree_dict, indent=2)))
+            )
         # Add user input to memory
         if user_input:
             await memory.aput(ChatMessage(role="user", content=user_input))
             # Update context
             await ctx.set("memory", memory)
-        input = memory.get()
-        assert len(input) > 0, "Memory input cannot be empty."
-        if self.add_tree_structure:
-            input = f"{TREE_STRUCTURE_PROMPT.format(tree_structure=json.dumps(self.tree_dict, indent=2))}\n\n{input}"
-        return InputEvent(input=input)
+        input_messages = memory.get()
+        return InputEvent(input=input_messages)
 
     @step
     async def handle_llm_input(
@@ -211,7 +246,9 @@ class Supervisor(Workflow):
 
         # Save the final response
         memory = await ctx.get("memory")
-        await memory.aput(response.message)
+        message = response.message
+        add_inline_agent_name(response.message, self.name)
+        await memory.aput(message)
         await ctx.set("memory", memory)
 
         # Check for tool calls
@@ -376,7 +413,6 @@ class Supervisor(Workflow):
 
         # Run the agent
         await self._run_agent(ctx, agent)
-
         # Add handoff back messages if needed
         if self.add_handoff_back_messages:
             handoff_messages = create_handoff_back_messages(
@@ -394,17 +430,20 @@ class Supervisor(Workflow):
         new_ctx = Context(agent)
 
         memory: ChatMemoryBuffer = await ctx.get("memory")
-        # add agent's system prompt to memory
-        # memory.chat_store.add_message(
-        #     memory.chat_store_key,
-        #     ChatMessage(role="system", content=agent.system_prompt),
-        #     idx=0
-        # )
         new_memory = memory.model_copy()
-        await new_ctx.set("memory", new_memory)  # Use new_memory instead of memory.model_copy()
+
+        # Create a new chat_store instance (assuming it has a copy method or constructor)
+        new_memory.chat_store = memory.chat_store.model_copy()  # or manually copy if needed
+        # Shallow copy the lists in store
+        new_memory.chat_store.store = {key: value[:] for key, value in memory.chat_store.store.items()}
+
+        await new_ctx.set("memory", new_memory) 
 
         # Run the agent
         await agent.run(ctx=new_ctx, chat_history=new_memory.get())
+        new_memory = await new_ctx.get("memory")
+        if self.name_addition:
+            self._add_name_to_messages(new_memory.get_all(), agent, start_range=len(memory.get_all()))
 
         # Update supervisor memory with agent's memory
         if self.output_mode == "full_history":
@@ -414,6 +453,12 @@ class Supervisor(Workflow):
             memo: ChatMemoryBuffer = await new_ctx.get("memory")
             last_message = memo.get_all()[-1]
             await memory.aput(last_message)
+    def _add_name_to_messages(self, messages: list[ChatMessage], agent: BaseWorkflowAgent, start_range: int) -> None:
+        """Add agent name to messages."""
+        for message in messages[start_range:]:
+            # handle none message.content inside the if statement
+            if message.role == "assistant" and  not re.search(r"<name>.*?</name><content>.*?</content>", message.content or ""):
+                add_inline_agent_name(message, agent.name)
 
     async def _update_memory(self, ctx: Context, messages: list[ChatMessage]) -> None:
         """Update memory with the provided messages."""
