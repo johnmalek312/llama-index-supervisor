@@ -9,7 +9,7 @@ CONTENT_PATTERN = re.compile(r"<content>(.*?)</content>", re.DOTALL)
 
 AgentNameMode = Literal["inline"]
 
-def add_inline_agent_name(message: ChatMessage) -> ChatMessage:
+def add_inline_agent_name(message: ChatMessage, name: str):
     """Add name and content XML tags to the message content.
 
     Examples:
@@ -22,11 +22,9 @@ def add_inline_agent_name(message: ChatMessage) -> ChatMessage:
     """
     if not isinstance(message, ChatMessage):
         return message
-    formatted_message = message.model_copy()
-    formatted_message.content = (
-        f"<name>{message.name}</name><content>{formatted_message.content}</content>"
+    message.content = (
+        f"<name>{name}</name><content>{message.content}</content>"
     )
-    return formatted_message
 
 
 def remove_inline_agent_name(message: ChatMessage) -> ChatMessage:
