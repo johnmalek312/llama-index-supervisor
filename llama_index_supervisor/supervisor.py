@@ -252,7 +252,7 @@ class Supervisor(Workflow):
             response, error_on_no_tool_call=False
         )
         if not tool_calls:
-            message = message.model_copy(deep=True)
+            message = response.message.model_copy(deep=True)
         else:
             message = response.message
         add_inline_agent_name(message, self.name)
