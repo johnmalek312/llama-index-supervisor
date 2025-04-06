@@ -246,18 +246,20 @@ class Supervisor(Workflow):
 
         # Save the final response
         memory = await ctx.get("memory")
-        message = response.message
-        add_inline_agent_name(response.message, self.name)
-        await memory.aput(message)
-        await ctx.set("memory", memory)
 
         # Check for tool calls
         tool_calls = self.llm.get_tool_calls_from_response(
             response, error_on_no_tool_call=False
         )
+        if not tool_calls:
+            message = message.model_copy(deep=True)
+        else:
+            message = response.message
+        add_inline_agent_name(message, self.name)
+        await memory.aput(message)
+        await ctx.set("memory", memory)
 
         if not tool_calls:
-
             return StopEvent(result=response)
 
         return ToolCallEvent(tool_calls=tool_calls)
