@@ -1,8 +1,6 @@
 # 🤖 llama-index-supervisor
 
-A Python library for creating hierarchical multi-agent systems using [LlamaIndex](https://github.com/run-llama/llama_index). Inspired by LangGraph's supervisor, this package provides a framework for orchestrating specialized agents within the LlamaIndex ecosystem.
-
-Hierarchical systems are a type of multi-agent architecture where specialized agents are coordinated by a central **supervisor** agent. The supervisor controls task delegation, making decisions about which agent or tool to invoke based on the current conversation context and task requirements.
+A Python library for creating hierarchical multi-agent systems using [LlamaIndex](https://github.com/run-llama/llama_index). Hierarchical systems are a type of multi-agent architecture where specialized agents are coordinated by a central supervisor agent. The supervisor controls all communication flow and task delegation, making decisions about which agent to invoke based on the current context and task requirements. (inspired by [Langgraph Supervisor](https://github.com/langchain-ai/langgraph-supervisor-py))
 
 ## Features
 
