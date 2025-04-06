@@ -7,3 +7,6 @@ requires-python = ">=3.10"
 dependencies = [
     "llama-index-core>=0.12.27",
 ]
+
+[tool.setuptools]
+packages = ["llama_index_supervisor"]
