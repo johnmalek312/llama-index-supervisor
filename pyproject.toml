@@ -1,6 +1,6 @@
 [project]
 name = "llama_index_supervisor"
-version = "0.1.8"
+version = "0.1.9"
 description = "This project is a Python-based multi-agent supervisor inspired by LangGraph, adapted for llama_index. It delegates tasks to specialized agents and tools, processes function-calling LLM responses, and manages conversation history. The structured workflow handles tool calls, processes agent handoffs with error handling, and provides flexible message management for hierarchical multi-agent systems."
 readme = "README.md"
 requires-python = ">=3.10"

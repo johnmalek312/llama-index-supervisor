@@ -403,7 +403,7 @@ class Supervisor(Workflow):
         tool_msgs.append(
             ChatMessage(
                 role="tool",
-                content=f"Successfully transferred to {agent.name}. Your task is: `{task}`, reason: `{reason}`",
+                content=f"Transitioned to {agent.name}. Your task is: `{task}`, reason: `{reason}`",
                 additional_kwargs={
                     "tool_call_id": handoff.tool_id,
                     "name": handoff.tool_name,

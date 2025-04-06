@@ -19,9 +19,10 @@ Hierarchical systems are a type of multi-agent architecture where specialized ag
 pip install llama-index-supervisor
 ```
 
-## Quickstart
+Here's a simple example of a supervisor managing two specialized agents (a math expert and a research expert) using LlamaIndex components. The diagram below illustrates the basic architecture:
 
-Here's a simple example of a supervisor managing two specialized agents (a math expert and a research expert) using LlamaIndex components.
+![Supervisor Architecture and Handoff](assets/supervisor.png)
+
 
 ```python
 # Ensure you have OPENAI_API_KEY set in your environment
@@ -229,10 +230,6 @@ print(result)
 ```
 
 ## Agent Handoff Mechanism
-
-The supervisor orchestrates agents by deciding which agent (or tool) should handle the current task.
-
-![Supervisor Architecture and Handoff](assets/supervisor.png)
 
 -   The `Supervisor` automatically creates internal "handoff" tools (`transfer_to_<agent_name>`) for each agent provided.
 -   When the supervisor's LLM decides to delegate a task, it calls the corresponding handoff tool.
