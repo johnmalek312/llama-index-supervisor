@@ -18,7 +18,7 @@ def _normalize_agent_name(agent_name: str) -> str:
     return WHITESPACE_RE.sub("_", agent_name.strip()).lower()
 
 
-def create_handoff_tool(agent) -> FunctionTool:
+def create_handoff_tool(agent_name: str, agent_description: str) -> FunctionTool:
     """Create a tool that can handoff control to the requested agent.
 
     Args:
@@ -28,14 +28,18 @@ def create_handoff_tool(agent) -> FunctionTool:
             although you are only limited to the names accepted by LangGraph
             nodes as well as the tool names accepted by LLM providers
             (the tool name will look like this: `transfer_to_<agent_name>`).
+        agent_description: A description of the agent's responsibilities and expertise.
     """
-    tool_name = f"transfer_to_{_normalize_agent_name(agent.name)}"
+    tool_name = f"transfer_to_{_normalize_agent_name(agent_name)}"
+    if not agent_description:
+        #Ask agent <agent_name> for help
+        agent_description = "Ask agent {} for help.".format(agent_name)
 
     def handoff_to_agent(ctx: Context, task: str, reason: str) -> str:
         return  # filler function
 
     return FunctionTool.from_defaults(fn=handoff_to_agent, name=tool_name, description=HANDOFF_TOOL_DESCRIPTION.format(
-        agent_name=agent.name, agent_description=agent.description))
+        agent_name=agent_name, agent_description=agent_description))
 
 
 def create_handoff_back_messages(

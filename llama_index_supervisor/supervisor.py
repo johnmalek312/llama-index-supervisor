@@ -194,14 +194,15 @@ class Supervisor(Workflow):
             self.agents_by_name[normalized_name] = agent
     def validate_agents(self, agents):
         for agent in agents:
-            assert hasattr(agent, "description"), f"Agent {agent} is missing 'description'"
-            assert hasattr(agent, "name"), f"Agent {agent} is missing 'name'"
+            # add a check to check if agent name is not None or empty or ...
+            assert hasattr(agent, "name") and agent.name, f"Agent {agent} is missing 'name' or name is empty"
+            assert isinstance(agent.name, str) and agent.name.strip(), f"Agent {agent} has an invalid 'name'. Name must be a non-empty string."
             assert hasattr(agent, "run") and callable(getattr(agent, "run")), f"Agent {agent} is missing 'run()' method"
 
     def _setup_tools(self) -> None:
         """Create tools for agents and register all tools."""
         # Create agent handoff tools
-        self.agent_tools = [create_handoff_tool(agent) for agent in self.agents]
+        self.agent_tools = [create_handoff_tool(agent.name, agent.description if hasattr(agent, "description") else "") for agent in self.agents]
         self.tools.extend(self.agent_tools)
 
         # Create lookup dictionaries
